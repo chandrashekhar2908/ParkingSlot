@@ -159,10 +159,6 @@ router.post('/vehicle/booking',async(req,res)=>{
                 res.send(vehicle)
                 break;
                     }
-                
-               
-
-                
             }
             i+=1;
         }
