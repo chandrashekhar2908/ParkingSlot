@@ -2,7 +2,6 @@ const express=require('express');
 const Vehicle=require('./../model/vehicle')
 const ParkingLot=require('./../model/parkingLot')
 const ParkingSpace=require("./../model/parkingSpace");
-// const parkingSpace = require('./../model/parkingSpace');
 const router = express.Router();
 
 router.delete('/refresh/Parking',async(req, res)=>{
@@ -35,7 +34,7 @@ router.get('/slotNumber/:registrationNumber',async(req,res)=>{
     res.send(car)
 })
 router.get('/carslotNumber/:color',async(req,res)=>{
-    const park=await Vehicle.find({color:req.params.color,type:'car'},{color:1,slot_number:1,registrationNumber:1});
+    const park=await Vehicle.find({$and:[{color:req.params.color},{type:'car'}]},{color:1,slot_number:1,registrationNumber:1});
     console.log(park.length);
     res.send(park)
 })
@@ -64,13 +63,24 @@ router.get('/parking',async(req,res)=>{
 
 router.post('/parking',async(req,res)=>{
     
-    let parking=new ParkingLot({
-        floor:req.body.floor,
-        capacity: req.body.capacity,
-        buffer:[Math.floor((req.body.capacity)*6/10),Math.floor((req.body.capacity)*3/10),Math.floor((req.body.capacity)-((req.body.capacity)*6/10+(req.body.capacity)*3/10))]
-    })
+    
     try{
-        if(parking.capacity%10==0){
+        const park=await ParkingLot.find({})
+        console.log(park)
+        if(park.length==1){
+            throw Error("Parking can be initialised once")}
+        if(!req.body.floor.toString().match(/^[0-9]+$/))
+            throw Error("floor should be numeric")
+        if(!req.body.capacity.toString().match(/^[0-9]+$/))
+            throw Error("capacity should be numeric")
+        if(req.body.capacity%10!=0)
+            throw Error("capacity should be multiple of 10")
+        let parking=new ParkingLot({
+            floor:req.body.floor,
+            capacity: req.body.capacity,
+            buffer:[Math.floor((req.body.capacity)*6/10),Math.floor((req.body.capacity)*3/10),Math.floor((req.body.capacity)-((req.body.capacity)*6/10+(req.body.capacity)*3/10))]
+        })
+        
        parking= await ParkingLot.create(parking);
     
        let count=0;
@@ -89,16 +99,13 @@ router.post('/parking',async(req,res)=>{
                    }));
        }
        res.send(parking)
-    }
-    else{
-        res.json({
-            error:"Capacity should be multiple of 10"
-        })
-    }
+    
+    
 }
    catch(e){
+    res.status(400);
     res.json({
-          error:"Error occured"
+          error:e.message
         })
 
    }
@@ -112,22 +119,21 @@ router.post('/vehicle/booking',async(req,res)=>{
                 type: req.body.type.toLowerCase(),
             })
     try{
-        
+        if(!vehicle.registrationNumber.match(/^[0-9a-zA-Z]+$/))  
+           throw Error("Not valid registration Number")
+        if(vehicle.type.toLowerCase()!='car'&&vehicle.type.toLowerCase()!='large_vehicle'&&vehicle.type.toLowerCase()!='bike')
+            throw Error("invalid type!! Type should be car, bike, large_vehicle")
+        console.log("hello")
         let parking=await ParkingLot.findOne();
-        let flag=0,car=0,bike=0,lv=0;
+        let flag=0;
         let parkingSpace= await ParkingSpace.find();
         for(let i=0;i<parkingSpace.length;i++){
             if(parkingSpace[i].vehicle_no==vehicle.registrationNumber){
                 flag=1;
                 res.send("Already in parking!!!")
                 break;
-            }
-            if(parkingSpace[i].vehicle_type!=null && parkingSpace[i].vehicle_type.toLowerCase()=='car'){car+=1}
-            if(parkingSpace[i].vehicle_type!=null && parkingSpace[i].vehicle_type.toLowerCase()=='bike'){bike+=1}
-            if(parkingSpace[i].vehicle_type!=null && parkingSpace[i].vehicle_type.toLowerCase()=='large_vehicle'){lv+=1}
-            
+            }   
         }
-        console.log("counted "+lv+" "+bike+" "+car)
         let i=0;
         if(flag!=1){
         while(i<parkingSpace.length){
@@ -139,45 +145,47 @@ router.post('/vehicle/booking',async(req,res)=>{
                 vehicle=await Vehicle.create(vehicle);
                 console.log(vehicle)
                 const d=new Date();
-                if((vehicle.type=='car' && car==parking.buffer[0])||(vehicle.type=='bike' && bike==parking.buffer[1])||(vehicle.type=='large_vehicle' && lv==parking.buffer[2])){
-                    console.log("countedInside "+lv+" "+bike+" "+car)
-                    i=(i+parking.capacity)-((i+parking.capacity)%(10))
-                    console.log(i+"---------i")
-                   
-                    continue    
-                }
-                
+                numberOfvehicles=await ParkingSpace.find({$and:[{vehicle_type:vehicle.type},{floor_number:(Math.floor(i/parking.capacity)+1)}]})
+                console.log("number of vehicles:"+numberOfvehicles.length+"floor"+(Math.floor(i/parking.capacity)+1))
+                if((vehicle.type=='car'&& numberOfvehicles.length>=parking.buffer[0])||(vehicle.type=='bike'&& numberOfvehicles.length>=parking.buffer[1])||(vehicle.type=='large_vehicle'&& numberOfvehicles.length>=parking.buffer[2]))
+                    i=(i+parking.capacity)-((i+parking.capacity)%10)
+                else{
                     const updatedParkingSpace=await ParkingSpace.findOneAndUpdate(
                     {_id:parkingSpace[i]._id},{is_available:false,vehicle_no:vehicle.registrationNumber,
                          entry:d,vehicle_type:vehicle.type}
                     
                 )
-                    
-                
-               
-
                 flag=1;
                 res.send(vehicle)
                 break;
+                    }
+                
+               
+
+                
             }
             i+=1;
         }
         if(flag==0){
-            res.send("No space")
+            res.status(200)
+            res.json({error:"No space"})
         }
     }
 }
     catch(e){
-        res.send("error")
+        res.status(400);
+            res.json({error:e.message})
     }
     
 
 })
 
 router.post('/vehicle/exit/:registrationNumber',async(req,res)=>{
+    try{
     const registrationNumber=req.params.registrationNumber;
     const vehicle=await Vehicle.findOne({registrationNumber:registrationNumber})
-    if(vehicle!=null){
+    if(vehicle==null){
+        throw Error("Vehicle not in parking!!")}
     console.log(vehicle)
     const slot=vehicle.slot_number.split("F:")
     const parkingSpace=await ParkingSpace.findOne({vehicle_no:vehicle.registrationNumber})
@@ -185,7 +193,13 @@ router.post('/vehicle/exit/:registrationNumber',async(req,res)=>{
     const exit=new Date();
     let diff =(exit.getTime() - entry.getTime()) / 1000;
     diff /= (60 * 60);
-    let fare=Math.max(Math.abs(Math.round(diff))*30,30)
+    let fare=0
+    if(vehicle.type=='car'){
+        fare=Math.max(Math.abs(Math.round(diff))*30,30)}
+    else if(vehicle.type=='bike'){
+        fare=Math.max(Math.abs(Math.round(diff))*10,10)}
+    else{
+        fare=Math.max(Math.abs(Math.round(diff))*50,50)}
     console.log(Math.abs(Math.round(diff)));
     console.log(entry+" "+exit)
     const updatedParkingSpace=await ParkingSpace.findOneAndUpdate({vehicle_no:vehicle.registrationNumber},{
@@ -202,10 +216,11 @@ router.post('/vehicle/exit/:registrationNumber',async(req,res)=>{
     res.json({
         fare:fare
     });
-}
-else{
+    }
+catch(e){
+    res.status(404);
     res.json({
-        error:"Not found in the parking"
+        error:e.message
     });
 }
 })
